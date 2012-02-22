@@ -28,13 +28,20 @@ namespace Sep.Git.Tfs.Test.Commands
         [TestMethod]
         public void ShouldAssociateWithWorkItem()
         {
-            mocks.Get<Globals>().Repository = mocks.Get<IGitRepository>();
-            var remote = mocks.Get<IGitTfsRemote>();
+            WireUpMockRemote();
             mocks.Get<IGitRepository>().Stub(x => x.GetLastParentTfsCommits(null)).IgnoreArguments()
-                .Return(new[] { new TfsChangesetInfo { Remote = remote } });
-            mocks.Get<IGitRepository>().Stub(x => x.GetLastParentTfsCommits("my-head")).Return(new TfsChangesetInfo[0]);
+                .Return(new[] { new TfsChangesetInfo { Remote = mocks.Get<IGitTfsRemote>() } });
             mocks.ClassUnderTest.Run();
 
+        }
+
+        private void WireUpMockRemote()
+        {
+            mocks.Get<Globals>().Repository = mocks.Get<IGitRepository>();
+            var remote = mocks.Get<IGitTfsRemote>();
+            remote.Stub(x => x.Repository).Return(mocks.Get<IGitRepository>());
+            mocks.Get<IGitRepository>().Stub(x => x.GetLastParentTfsCommits(null)).IgnoreArguments()
+                .Return(new[] { new TfsChangesetInfo { Remote = remote } });
         }
     }
 }
