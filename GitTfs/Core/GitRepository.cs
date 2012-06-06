@@ -18,6 +18,8 @@ namespace Sep.Git.Tfs.Core
         private static readonly Regex configLineRegex = new Regex("^tfs-remote\\.(?<id>[^.]+)\\.(?<key>[^.=]+)=(?<value>.*)$");
         private IDictionary<string, IGitTfsRemote> _cachedRemotes;
         private Repository _repository;
+        private static readonly Regex treeRegex =
+               new Regex(@"\A(?<mode>\d{6}) (?<type>blob|tree) (?<sha>" + GitTfsConstants.Sha1 + @")\t(?<path>.*)");
 
         public GitRepository(TextWriter stdout, string gitDir, IContainer container, Globals globals)
             : base(stdout, container)
@@ -347,8 +349,6 @@ namespace Sep.Git.Tfs.Core
 
         private GitObject MakeGitObject(string commit, string treeInfo)
         {
-            var treeRegex =
-                new Regex(@"\A(?<mode>\d{6}) (?<type>blob|tree) (?<sha>" + GitTfsConstants.Sha1 + @")\t(?<path>.*)");
             var match = treeRegex.Match(treeInfo);
             return !match.Success ? null : new GitObject
                                                {
