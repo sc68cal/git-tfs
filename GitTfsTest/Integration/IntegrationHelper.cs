@@ -2,7 +2,9 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Reflection;
+using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Sep.Git.Tfs.Core;
 using Sep.Git.Tfs.Core.TfsInterop;
@@ -114,7 +116,7 @@ namespace Sep.Git.Tfs.Test.Integration
             startInfo.EnvironmentVariables["GIT_TFS_CLIENT"] = "Fake";
             startInfo.EnvironmentVariables[Script.EnvVar] = FakeScript;
             startInfo.EnvironmentVariables["Path"] = CurrentBuildPath + ";" + Environment.GetEnvironmentVariable("Path");
-            startInfo.FileName = @"C:\Program Files\git\cmd\git.cmd";
+            startInfo.FileName = "git.cmd";
             startInfo.Arguments = "tfs --debug " + String.Join(" ", args);
             startInfo.UseShellExecute = false;
             startInfo.RedirectStandardOutput = true;
@@ -176,10 +178,18 @@ namespace Sep.Git.Tfs.Test.Integration
             Assert.AreEqual("", String.Join(", ", entries.ToArray()), "other entries in " + repodir);
         }
 
+        public void AssertCleanWorkspace(string repodir)
+        {
+            var repo = new LibGit2Sharp.Repository(Path.Combine(Workdir, repodir));
+            var status = repo.Index.RetrieveStatus();
+            var statusString = String.Join("\n", status.Select(statusEntry => "" + statusEntry.State + ": " + statusEntry.FilePath).ToArray());
+            Assert.AreEqual("", statusString, "repo status");
+        }
+
         public void AssertFileInWorkspace(string repodir, string file, string contents)
         {
             var path = Path.Combine(Workdir, repodir, file);
-            Assert.AreEqual(contents, File.ReadAllText(path), "Contents of " + path);
+            Assert.AreEqual(contents, File.ReadAllText(path, Encoding.UTF8), "Contents of " + path); // UTF-8 is the default, but let's be explicit about it
         }
 
         #endregion

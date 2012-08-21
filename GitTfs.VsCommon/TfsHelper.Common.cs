@@ -201,7 +201,7 @@ namespace Sep.Git.Tfs.VsCommon
                 _bridge.Wrap<WrapperForVersionControlServer, VersionControlServer>(VersionControl);
             // TODO - containerify this (no `new`)!
             var fakeChangeset = new FakeChangeset(shelveset, change, wrapperForVersionControlServer, _bridge);
-            var tfsChangeset = new TfsChangeset(remote.Tfs, fakeChangeset, _stdout) { Summary = new TfsChangesetInfo { Remote = remote } };
+            var tfsChangeset = new TfsChangeset(remote.Tfs, fakeChangeset, _stdout, null) { Summary = new TfsChangesetInfo { Remote = remote } };
             return tfsChangeset;
         }
 
@@ -415,13 +415,12 @@ namespace Sep.Git.Tfs.VsCommon
                 }
             }
 
-            public Stream DownloadFile()
+            public TemporaryFile DownloadFile()
             {
-                string temp = Path.GetTempFileName();
+                var temp = new TemporaryFile();
                 _pendingChange.DownloadShelvedFile(temp);
-                var stream = new TemporaryFileStream(temp);
-                _contentLength = stream.Length;
-                return stream;
+                _contentLength = new FileInfo(temp).Length;
+                return temp;
             }
         }
 

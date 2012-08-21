@@ -4,10 +4,10 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
-using GitSharp.Core;
 using Sep.Git.Tfs.Commands;
 using StructureMap;
-using FileMode = GitSharp.Core.FileMode;
+using FileMode = LibGit2Sharp.Mode;
+using LibGit2Sharp;
 
 namespace Sep.Git.Tfs.Core
 {
@@ -28,7 +28,12 @@ namespace Sep.Git.Tfs.Core
             DirectoryInfo GitDirectoryInfo = GitHelpers.ResolveRepositoryLocation();
 
             GitDir = GitDirectoryInfo.ToString();
-            _repository = new Repository(GitDirectoryInfo);
+            _repository = new LibGit2Sharp.Repository(GitDir);
+        }
+
+        ~GitRepository()
+        {
+            _repository.Dispose();
         }
 
         public string GitDir { get; set; }
@@ -222,7 +227,7 @@ namespace Sep.Git.Tfs.Core
 
         public GitCommit GetCommit(string commitish)
         {
-            return _container.With(_repository.MapCommit(commitish)).GetInstance<GitCommit>();
+            return new GitCommit(_repository.Lookup<Commit>(commitish));
         }
 
         public IEnumerable<TfsChangesetInfo> GetLastParentTfsCommits(string head)
@@ -295,8 +300,7 @@ namespace Sep.Git.Tfs.Core
             var entries = GetObjects();
             if (commit != null)
             {
-                ParseEntries(entries, Command("ls-tree", "-r", "-z", commit), commit);
-                ParseEntries(entries, Command("ls-tree", "-r", "-d", "-z", commit), commit);
+                ParseEntries(entries, _repository.Lookup<Commit>(commit).Tree, commit);
             }
             return entries;
         }
@@ -308,59 +312,38 @@ namespace Sep.Git.Tfs.Core
 
         public string GetCommitMessage(string head, string parentCommitish)
         {
-            string message = string.Empty;
-            using (var logMessage = CommandOutputPipe("log", parentCommitish + ".." + head))
+            System.Text.StringBuilder message = new System.Text.StringBuilder();
+            foreach (LibGit2Sharp.Commit comm in
+                _repository.Commits.QueryBy(new LibGit2Sharp.Filter { Since = head, Until = parentCommitish }))
             {
-                string line;
-                while (null != (line = logMessage.ReadLine()))
-                {
-                    if (!line.StartsWith("   "))
-                        continue;
-                    message += line.TrimStart() + Environment.NewLine;
-                }
+                message.AppendLine(comm.Message);
             }
-            return message;
+            return message.ToString();
         }
 
-        private void ParseEntries(IDictionary<string, GitObject> entries, string treeInfo, string commit)
+        private void ParseEntries(IDictionary<string, GitObject> entries, Tree treeInfo, string commit)
         {
-            int start = 0;
-            int end = 0;
-            string path = string.Empty;
-
-            while( start < treeInfo.Length && end < treeInfo.Length )
+            var treesToDescend = new Queue<Tree>(new[] {treeInfo});
+            while (treesToDescend.Any())
             {
-                end = treeInfo.IndexOf('\0',start);
-                if( -1 == end )
+                var currentTree = treesToDescend.Dequeue();
+                foreach (var item in currentTree)
                 {
-                    end = treeInfo.Length;
+                    if (item.Type == GitObjectType.Tree)
+                    {
+                        treesToDescend.Enqueue((Tree)item.Target);
+                    }
+                    var path = item.Path.Replace('\\', '/');
+                    entries[path] = new GitObject
+                    {
+                        Mode = item.Mode.ToModeString(),
+                        Sha = item.Target.Sha,
+                        ObjectType = item.Type.ToString().ToLower(),
+                        Path = path,
+                        Commit = commit
+                    };
                 }
-
-                path = treeInfo.Substring( start , end - start );
-
-                var gitObject = MakeGitObject(commit, path);
-                if (gitObject != null)
-                {
-                    entries[gitObject.Path] = gitObject;
-                }
-
-                start = end + 1;
             }
-        }
-
-        private GitObject MakeGitObject(string commit, string treeInfo)
-        {
-            var treeRegex =
-                new Regex(@"\A(?<mode>\d{6}) (?<type>blob|tree) (?<sha>" + GitTfsConstants.Sha1 + @")\t(?<path>.*)");
-            var match = treeRegex.Match(treeInfo);
-            return !match.Success ? null : new GitObject
-                                               {
-                                                   Mode = match.Groups["mode"].Value,
-                                                   Sha = match.Groups["sha"].Value,
-                                                   ObjectType = match.Groups["type"].Value,
-                                                   Path = match.Groups["path"].Value,
-                                                   Commit = commit
-                                               };
         }
 
         public IEnumerable<IGitChangedFile> GetChangedFiles(string from, string to)
@@ -385,59 +368,34 @@ namespace Sep.Git.Tfs.Core
             return change.ToGitChangedFile(_container.With((IGitRepository) this));
         }
 
-        public string GetChangeSummary(string from, string to)
-        {
-            string summary = "";
-            CommandOutputPipe(stdout => summary = stdout.ReadToEnd(),
-                              "diff-tree", "--shortstat", "-M", from, to);
-            return summary;
-        }
-
         public bool WorkingCopyHasUnstagedOrUncommitedChanges
         {
             get
             {
-                string pendingChanges = "";
-                CommandOutputPipe(stdout => pendingChanges = stdout.ReadToEnd(),
-                                  "diff-index", "--name-status", "-M", "HEAD");
-                return !string.IsNullOrEmpty(pendingChanges);
+                return (from 
+                            entry in _repository.Index.RetrieveStatus()
+                        where 
+                             entry.State != FileStatus.Ignored &&
+                             entry.State != FileStatus.Untracked
+                        select entry).Count() > 0;
             }
         }
 
-        public void GetBlob(string sha, string outputFile)
+        public void CopyBlob(string sha, string outputFile)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(outputFile));
-            CommandOutputPipe(stdout => Copy(stdout, outputFile), "cat-file", "-p", sha);
-        }
-
-        private void Copy(TextReader stdout, string file)
-        {
-            var stdoutStream = ((StreamReader) stdout).BaseStream;
-            using (var destination = File.Create(file))
-            {
-                stdoutStream.CopyTo(destination);
-            }
+            Blob blob; 
+            var destination = new FileInfo(outputFile);
+            if (!destination.Directory.Exists)
+                destination.Directory.Create();
+            if ((blob = _repository.Lookup<Blob>(sha)) != null)
+                using (Stream stream = blob.ContentStream)
+                using (var outstream = File.Create(destination.FullName))
+                        stream.CopyTo(outstream);
         }
 
         public string HashAndInsertObject(string filename)
         {
-            var writer = new ObjectWriter(_repository);
-            var objectId = writer.WriteBlob(new FileInfo(filename));
-            return objectId.Name;
-        }
-
-        public string HashAndInsertObject(Stream file)
-        {
-            var writer = new ObjectWriter(_repository);
-            var objectId = writer.WriteBlob(file.Length, file);
-            return objectId.Name;
-        }
-
-        public string HashAndInsertObject(Stream file, long length)
-        {
-            var writer = new ObjectWriter(_repository);
-            var objectId = writer.WriteBlob(length, file);
-            return objectId.Name;
+            return _repository.ObjectDatabase.CreateBlob(filename).Id.Sha;
         }
     }
 }
