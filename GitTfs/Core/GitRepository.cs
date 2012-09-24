@@ -17,7 +17,6 @@ namespace Sep.Git.Tfs.Core
         private readonly Globals _globals;
         private static readonly Regex configLineRegex = new Regex("^tfs-remote\\.(?<id>[^.]+)\\.(?<key>[^.=]+)=(?<value>.*)$");
         private IDictionary<string, IGitTfsRemote> _cachedRemotes;
-        private Repository _repository;
 
         public GitRepository(TextWriter stdout, string gitDir, IContainer container, Globals globals)
             : base(stdout, container)
@@ -25,12 +24,6 @@ namespace Sep.Git.Tfs.Core
             _container = container;
             _globals = globals;
             GitDir = gitDir;
-            _repository = new LibGit2Sharp.Repository(GitDir);
-        }
-
-        ~GitRepository()
-        {
-            _repository.Dispose();
         }
 
         public string GitDir { get; set; }
@@ -224,7 +217,8 @@ namespace Sep.Git.Tfs.Core
 
         public GitCommit GetCommit(string commitish)
         {
-            return new GitCommit(_repository.Lookup<Commit>(commitish));
+            using(var _repository = new LibGit2Sharp.Repository(GitDir))
+                return new GitCommit(_repository.Lookup<Commit>(commitish));
         }
 
         public IEnumerable<TfsChangesetInfo> GetLastParentTfsCommits(string head)
@@ -294,12 +288,14 @@ namespace Sep.Git.Tfs.Core
 
         public IDictionary<string, GitObject> GetObjects(string commit)
         {
-            var entries = GetObjects();
-            if (commit != null)
-            {
-                ParseEntries(entries, _repository.Lookup<Commit>(commit).Tree, commit);
+            using(var _repository = new LibGit2Sharp.Repository(GitDir)){
+                var entries = GetObjects();
+                if (commit != null)
+                {
+                    ParseEntries(entries, _repository.Lookup<Commit>(commit).Tree, commit);
+                }
+                return entries;
             }
-            return entries;
         }
 
         public Dictionary<string, GitObject> GetObjects()
@@ -309,13 +305,15 @@ namespace Sep.Git.Tfs.Core
 
         public string GetCommitMessage(string head, string parentCommitish)
         {
-            System.Text.StringBuilder message = new System.Text.StringBuilder();
-            foreach (LibGit2Sharp.Commit comm in
-                _repository.Commits.QueryBy(new LibGit2Sharp.Filter { Since = head, Until = parentCommitish }))
-            {
-                message.AppendLine(comm.Message);
+            using(var _repository = new LibGit2Sharp.Repository(GitDir)){
+                System.Text.StringBuilder message = new System.Text.StringBuilder();
+                foreach (LibGit2Sharp.Commit comm in
+                    _repository.Commits.QueryBy(new LibGit2Sharp.Filter { Since = head, Until = parentCommitish }))
+                {
+                    message.AppendLine(comm.Message);
+                }
+                return message.ToString();
             }
-            return message.ToString();
         }
 
         private void ParseEntries(IDictionary<string, GitObject> entries, Tree treeInfo, string commit)
@@ -369,30 +367,35 @@ namespace Sep.Git.Tfs.Core
         {
             get
             {
-                return (from 
-                            entry in _repository.Index.RetrieveStatus()
-                        where 
-                             entry.State != FileStatus.Ignored &&
-                             entry.State != FileStatus.Untracked
-                        select entry).Count() > 0;
+                using(var _repository = new LibGit2Sharp.Repository(GitDir)){
+                    return (from 
+                                entry in _repository.Index.RetrieveStatus()
+                            where 
+                                 entry.State != FileStatus.Ignored &&
+                                 entry.State != FileStatus.Untracked
+                            select entry).Count() > 0;
+                }
             }
         }
 
         public void CopyBlob(string sha, string outputFile)
         {
-            Blob blob; 
-            var destination = new FileInfo(outputFile);
-            if (!destination.Directory.Exists)
-                destination.Directory.Create();
-            if ((blob = _repository.Lookup<Blob>(sha)) != null)
-                using (Stream stream = blob.ContentStream)
-                using (var outstream = File.Create(destination.FullName))
-                        stream.CopyTo(outstream);
+            using(var _repository = new LibGit2Sharp.Repository(GitDir)){
+                Blob blob; 
+                var destination = new FileInfo(outputFile);
+                if (!destination.Directory.Exists)
+                    destination.Directory.Create();
+                if ((blob = _repository.Lookup<Blob>(sha)) != null)
+                    using (Stream stream = blob.ContentStream)
+                    using (var outstream = File.Create(destination.FullName))
+                            stream.CopyTo(outstream);
+            }
         }
 
         public string HashAndInsertObject(string filename)
         {
-            return _repository.ObjectDatabase.CreateBlob(filename).Id.Sha;
+            using(var _repository = new LibGit2Sharp.Repository(GitDir))
+                return _repository.ObjectDatabase.CreateBlob(filename).Id.Sha;
         }
     }
 }
